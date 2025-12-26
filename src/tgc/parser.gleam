@@ -1,6 +1,7 @@
 import gleam/int
 import gleam/io
 import gleam/list
+import gleam/option
 import gleam/result
 import gleam/string
 import tgc/lexer
@@ -69,7 +70,7 @@ fn error(ctx: ParserContext, token: lexer.Token, message: String) {
   io.println("error: " <> message)
   io.println("  │")
   io.println(
-    int.to_string(token.row) |> string.pad_start(2, "")
+    int.to_string(token.row + 1) |> string.pad_start(2, "")
     <> " │ "
     <> at(ctx.contents, token.row - 1) |> result.unwrap(""),
   )
@@ -119,21 +120,89 @@ fn parse_root_import(
   }
 }
 
+fn assert_advance(ctx: ParserContext, kind: lexer.TokenKind) {
+  case ctx.rest {
+    [token, ..rest] ->
+      case token.kind == kind {
+        True -> ParserContext(..ctx, token:, rest:)
+        False -> error_invalid_token(ctx, token, [kind])
+      }
+    _ -> error_unexpected_eof(ctx, ctx.token)
+  }
+}
+
+fn advance(ctx: ParserContext) {
+  case ctx.rest {
+    [token, ..rest] -> #(ParserContext(..ctx, token:, rest:), token)
+    _ -> error_unexpected_eof(ctx, ctx.token)
+  }
+}
+
+fn peek(ctx: ParserContext) {
+  case ctx.rest {
+    [token, ..] -> option.Some(token)
+    _ -> option.None
+  }
+}
+
+fn parse_type_args(ctx: ParserContext) {
+  let #(ctx, label) = advance(ctx)
+  let ctx = assert_advance(ctx, lexer.TokenColon)
+  let next = peek(ctx)
+
+  case next {
+    option.Some(next) ->
+      case next.kind {
+        lexer.TokenIdentifier -> {
+          let #(ctx, arg_type) = advance(ctx)
+        }
+        lexer.TokenColon -> {
+          todo
+        }
+        lexer.TokenParenRight -> {
+          todo
+        }
+      }
+    option.None -> error_unexpected_eof(ctx, ctx.token)
+  }
+}
+
+fn parse_root_fn(ctx: ParserContext, public: Bool) {
+  let #(ctx, name) = advance(ctx)
+  let ctx = assert_advance(ctx, lexer.TokenParenLeft)
+  ctx
+}
+
 fn parse_root(ctx: ParserContext) {
   echo ctx.ast
 
   case ctx.rest {
     [token, ..rest] ->
-      case token.kind {
-        lexer.TokenIdentifier ->
-          case token.lexeme {
-            "import" ->
-              parse_root_import(ParserContext(..ctx, token:, rest:), [], token)
-              |> parse_root
-            _ -> todo as "unimplemented identifier in root"
+      case token.kind, token.lexeme {
+        lexer.TokenIdentifier, "import" ->
+          parse_root_import(ParserContext(..ctx, token:, rest:), [], token)
+          |> parse_root
+        lexer.TokenIdentifier, "pub" ->
+          case rest {
+            [token, ..rest] ->
+              case token.kind, token.lexeme {
+                lexer.TokenIdentifier, "fn" -> {
+                  parse_root_fn(ParserContext(..ctx, token:, rest:), True)
+                  |> parse_root
+                }
+                _, _ -> error_invalid_token(ctx, token, [lexer.TokenIdentifier])
+              }
+            _ -> error_unexpected_eof(ctx, token)
           }
-        _ -> todo as "unimplemented token type in root"
+        lexer.TokenEol, _ -> parse_root(ParserContext(..ctx, rest:))
+        _, _ ->
+          error(
+            ctx,
+            token,
+            "unimplemented token type in root "
+              <> lexer.kind_to_string(token.kind),
+          )
       }
-    _ -> todo as "completed"
+    _ -> error(ctx, ctx.token, "completed")
   }
 }
