@@ -1,3 +1,4 @@
+import comparator
 import gleam/int
 import gleam/io
 import gleam/list
@@ -8,6 +9,17 @@ import tgc/lexer
 
 pub type AstKind {
   AstImport(path: List(String))
+  AstFuncDef(
+    public: Bool,
+    name: String,
+    args: List(#(String, String)),
+    body: List(AstNode),
+  )
+  AstFuncCall(
+    module: option.Option(String),
+    name: String,
+    args: List(#(option.Option(String), lexer.Token)),
+  )
 }
 
 pub type AstNode {
@@ -38,7 +50,7 @@ pub fn parse(tokens: List(lexer.Token), contents: List(String)) {
   parse_root(ParserContext(
     tokens:,
     rest: tokens,
-    token: lexer.Token(lexer.TokenIdentifier, "", 0, 0),
+    token: lexer.Token(lexer.TokenIdentifier(""), "", 0, 0),
     ast: [],
     contents:,
   ))
@@ -86,17 +98,17 @@ fn parse_root_import(
   case ctx.rest {
     [token, ..rest] ->
       case token.kind {
-        lexer.TokenIdentifier -> {
+        lexer.TokenIdentifier(_) -> {
           case rest {
-            [token2, ..rest] ->
+            [token2, ..rest2] ->
               case token2.kind {
                 lexer.TokenSlash ->
                   parse_root_import(
-                    ParserContext(..ctx, rest:, token: token2),
+                    ParserContext(..ctx, rest: rest2, token: token2),
                     [token.lexeme, ..acc],
                     root_token,
                   )
-                lexer.TokenEol ->
+                _ ->
                   ParserContext(..ctx, token: token2, rest:, ast: [
                     AstNode(
                       kind: AstImport([token.lexeme, ..acc] |> list.reverse),
@@ -105,16 +117,11 @@ fn parse_root_import(
                     ),
                     ..ctx.ast
                   ])
-                _ ->
-                  error_invalid_token(ctx, token2, [
-                    lexer.TokenSlash,
-                    lexer.TokenEol,
-                  ])
               }
             _ -> error_unexpected_eof(ctx, token)
           }
         }
-        _ -> error_invalid_token(ctx, token, [lexer.TokenIdentifier])
+        _ -> error_invalid_token(ctx, token, [lexer.TokenIdentifier("")])
       }
     _ -> error_unexpected_eof(ctx, ctx.token)
   }
@@ -122,17 +129,22 @@ fn parse_root_import(
 
 fn assert_advance(ctx: ParserContext, kind: lexer.TokenKind) {
   case ctx.rest {
-    [token, ..rest] ->
-      case token.kind == kind {
-        True -> ParserContext(..ctx, token:, rest:)
+    [token, ..rest] -> {
+      echo "a"
+      echo kind
+      echo token.kind
+      echo comparator.is_same_kind(token.kind, kind)
+      case comparator.is_same_kind(token.kind, kind) {
+        True -> #(ParserContext(..ctx, token:, rest:), token)
         False -> error_invalid_token(ctx, token, [kind])
       }
+    }
     _ -> error_unexpected_eof(ctx, ctx.token)
   }
 }
 
 fn assert_token(ctx: ParserContext, token: lexer.Token, kind: lexer.TokenKind) {
-  case token.kind == kind {
+  case comparator.is_same_kind(token.kind, kind) {
     True -> ParserContext(..ctx, token:)
     False -> error_invalid_token(ctx, token, [kind])
   }
@@ -159,13 +171,13 @@ fn parse_type_args(ctx: ParserContext, args: List(#(String, String))) {
     lexer.TokenParenRight -> #(ctx, args)
 
     _ -> {
-      let ctx = assert_advance(ctx, lexer.TokenColon)
+      let #(ctx, _) = assert_advance(ctx, lexer.TokenColon)
 
       let next = peek(ctx)
       case next {
         option.Some(next) ->
           case next.kind {
-            lexer.TokenIdentifier -> {
+            lexer.TokenIdentifier(_) -> {
               let #(ctx, arg_type) = advance(ctx)
               parse_type_args(ctx, [#(label.lexeme, arg_type.lexeme), ..args])
             }
@@ -177,7 +189,7 @@ fn parse_type_args(ctx: ParserContext, args: List(#(String, String))) {
             }
             _ ->
               error_invalid_token(ctx, next, [
-                lexer.TokenIdentifier,
+                lexer.TokenIdentifier(""),
                 lexer.TokenComma,
                 lexer.TokenParenRight,
               ])
@@ -188,18 +200,82 @@ fn parse_type_args(ctx: ParserContext, args: List(#(String, String))) {
   }
 }
 
-fn parse_body(ctx: ParserContext) {
-  todo
+fn parse_value_args(
+  ctx: ParserContext,
+  args: List(#(option.Option(String), lexer.Token)),
+) {
+  let #(ctx, value) = advance(ctx)
+  let #(ctx, next) = advance(ctx)
+
+  case next.kind {
+    lexer.TokenComma -> parse_value_args(ctx, [#(option.None, value), ..args])
+    lexer.TokenParenRight -> #(ctx, [#(option.None, value), ..args])
+    _ ->
+      error_invalid_token(ctx, next, [
+        lexer.TokenComma,
+        lexer.TokenParenRight,
+      ])
+  }
+}
+
+fn parse_block(ctx: ParserContext, body: List(AstNode)) {
+  let #(ctx, token1) = advance(ctx)
+  case token1.kind {
+    lexer.TokenIdentifier(_) -> {
+      let #(ctx, token2) = advance(ctx)
+      case token2.kind {
+        lexer.TokenPeriod -> {
+          let module = token1
+          let #(ctx, name) = assert_advance(ctx, lexer.TokenIdentifier(""))
+          let #(ctx, _) = assert_advance(ctx, lexer.TokenParenLeft)
+          let #(ctx, args) = parse_value_args(ctx, [])
+
+          parse_block(ctx, [
+            AstNode(
+              kind: AstFuncCall(
+                module: option.Some(module.lexeme),
+                name: name.lexeme,
+                args:,
+              ),
+              col: module.col,
+              row: module.row,
+            ),
+            ..body
+          ])
+        }
+        lexer.TokenParenLeft -> {
+          let name = token1
+          todo
+        }
+        _ ->
+          error_invalid_token(ctx, token2, [
+            lexer.TokenPeriod,
+            lexer.TokenParenLeft,
+          ])
+      }
+    }
+    lexer.TokenBraceRight -> #(ctx, body)
+    _ -> error_invalid_token(ctx, ctx.token, [lexer.TokenIdentifier("")])
+  }
 }
 
 fn parse_root_fn(ctx: ParserContext, public: Bool) {
   let #(ctx, name) = advance(ctx)
-  let ctx = assert_advance(ctx, lexer.TokenParenLeft)
+  let #(ctx, _) = assert_advance(ctx, lexer.TokenParenLeft)
   let #(ctx, args) =
     parse_type_args(ctx, [])
     |> echo
+  let #(ctx, _) = assert_advance(ctx, lexer.TokenBraceLeft)
+  let #(ctx, body) = parse_block(ctx, [])
 
-  ctx
+  ParserContext(..ctx, ast: [
+    AstNode(
+      kind: AstFuncDef(public:, name: name.lexeme, args:, body:),
+      col: name.col,
+      row: name.row,
+    ),
+    ..ctx.ast
+  ])
 }
 
 fn parse_root(ctx: ParserContext) {
@@ -207,24 +283,23 @@ fn parse_root(ctx: ParserContext) {
 
   case ctx.rest {
     [token, ..rest] ->
-      case token.kind, token.lexeme {
-        lexer.TokenIdentifier, "import" ->
+      case token.kind {
+        lexer.TokenKeyword("import") ->
           parse_root_import(ParserContext(..ctx, token:, rest:), [], token)
           |> parse_root
-        lexer.TokenIdentifier, "pub" ->
+        lexer.TokenKeyword("pub") ->
           case rest {
             [token, ..rest] ->
-              case token.kind, token.lexeme {
-                lexer.TokenIdentifier, "fn" -> {
+              case token.kind {
+                lexer.TokenKeyword("fn") -> {
                   parse_root_fn(ParserContext(..ctx, token:, rest:), True)
                   |> parse_root
                 }
-                _, _ -> error_invalid_token(ctx, token, [lexer.TokenIdentifier])
+                _ -> error_invalid_token(ctx, token, [lexer.TokenKeyword("")])
               }
             _ -> error_unexpected_eof(ctx, token)
           }
-        lexer.TokenEol, _ -> parse_root(ParserContext(..ctx, rest:))
-        _, _ ->
+        _ ->
           error(
             ctx,
             token,
@@ -232,6 +307,6 @@ fn parse_root(ctx: ParserContext) {
               <> lexer.kind_to_string(token.kind),
           )
       }
-    _ -> error(ctx, ctx.token, "completed")
+    _ -> list.reverse(ctx.ast)
   }
 }

@@ -17,7 +17,8 @@ pub type LexerContext {
 }
 
 pub type TokenKind {
-  TokenIdentifier
+  TokenIdentifier(String)
+  TokenKeyword(String)
   TokenString(String)
   TokenBraceRight
   TokenBraceLeft
@@ -38,12 +39,12 @@ pub type TokenKind {
   TokenMinus
   TokenPipe
   TokenPatternOr
-  TokenEol
 }
 
 pub fn kind_to_string(kind: TokenKind) {
   case kind {
-    TokenIdentifier -> "Identifier"
+    TokenIdentifier(_) -> "Identifier"
+    TokenKeyword(kw) -> "Keyword " <> kw
     TokenString(_) -> "String"
     TokenBraceRight -> "BraceRight"
     TokenBraceLeft -> "BraceLeft"
@@ -64,7 +65,6 @@ pub fn kind_to_string(kind: TokenKind) {
     TokenMinus -> "Minus"
     TokenPipe -> "Pipe"
     TokenPatternOr -> "PatternOr"
-    TokenEol -> "Eol"
   }
 }
 
@@ -124,7 +124,10 @@ fn advance(ctx: LexerContext) -> LexerContext {
 fn pop_identifier(ctx: LexerContext) {
   LexerContext(..ctx, acc: "", tokens: [
     Token(
-      kind: TokenIdentifier,
+      kind: case ctx.acc {
+        "fn" | "case" | "pub" | "use" | "import" -> TokenKeyword(ctx.acc)
+        _ -> TokenIdentifier(ctx.acc)
+      },
       lexeme: ctx.acc,
       row: ctx.row,
       col: ctx.col - string.length(ctx.acc) - 1,
@@ -182,7 +185,7 @@ fn do_lex(ctx: LexerContext) {
 
   case ctx.pointer {
     "\n" -> {
-      let ctx = pop_id_if_non_empty(ctx) |> add_token(TokenEol, "\n")
+      let ctx = pop_id_if_non_empty(ctx)
       do_lex(LexerContext(..ctx, row: ctx.row + 1, col: 0))
     }
     " " -> {
