@@ -131,6 +131,13 @@ fn assert_advance(ctx: ParserContext, kind: lexer.TokenKind) {
   }
 }
 
+fn assert_token(ctx: ParserContext, token: lexer.Token, kind: lexer.TokenKind) {
+  case token.kind == kind {
+    True -> ParserContext(..ctx, token:)
+    False -> error_invalid_token(ctx, token, [kind])
+  }
+}
+
 fn advance(ctx: ParserContext) {
   case ctx.rest {
     [token, ..rest] -> #(ParserContext(..ctx, token:, rest:), token)
@@ -145,31 +152,53 @@ fn peek(ctx: ParserContext) {
   }
 }
 
-fn parse_type_args(ctx: ParserContext) {
+fn parse_type_args(ctx: ParserContext, args: List(#(String, String))) {
   let #(ctx, label) = advance(ctx)
-  let ctx = assert_advance(ctx, lexer.TokenColon)
-  let next = peek(ctx)
 
-  case next {
-    option.Some(next) ->
-      case next.kind {
-        lexer.TokenIdentifier -> {
-          let #(ctx, arg_type) = advance(ctx)
-        }
-        lexer.TokenColon -> {
-          todo
-        }
-        lexer.TokenParenRight -> {
-          todo
-        }
+  case label.kind {
+    lexer.TokenParenRight -> #(ctx, args)
+
+    _ -> {
+      let ctx = assert_advance(ctx, lexer.TokenColon)
+
+      let next = peek(ctx)
+      case next {
+        option.Some(next) ->
+          case next.kind {
+            lexer.TokenIdentifier -> {
+              let #(ctx, arg_type) = advance(ctx)
+              parse_type_args(ctx, [#(label.lexeme, arg_type.lexeme), ..args])
+            }
+            lexer.TokenComma -> {
+              todo
+            }
+            lexer.TokenParenRight -> {
+              todo
+            }
+            _ ->
+              error_invalid_token(ctx, next, [
+                lexer.TokenIdentifier,
+                lexer.TokenComma,
+                lexer.TokenParenRight,
+              ])
+          }
+        option.None -> error_unexpected_eof(ctx, ctx.token)
       }
-    option.None -> error_unexpected_eof(ctx, ctx.token)
+    }
   }
+}
+
+fn parse_body(ctx: ParserContext) {
+  todo
 }
 
 fn parse_root_fn(ctx: ParserContext, public: Bool) {
   let #(ctx, name) = advance(ctx)
   let ctx = assert_advance(ctx, lexer.TokenParenLeft)
+  let #(ctx, args) =
+    parse_type_args(ctx, [])
+    |> echo
+
   ctx
 }
 
