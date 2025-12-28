@@ -86,7 +86,7 @@ fn error(ctx: ParserContext, token: lexer.Token, message: String) {
     <> " │ "
     <> at(ctx.contents, token.row - 1) |> result.unwrap(""),
   )
-  io.println("  │ " <> string.pad_start("^", token.col, " "))
+  io.println("  │ " <> string.pad_start("^", token.col + 1, " "))
   panic
 }
 
@@ -171,7 +171,10 @@ fn parse_type_args(ctx: ParserContext, args: List(#(String, String))) {
     lexer.TokenParenRight -> #(ctx, args)
 
     _ -> {
-      let #(ctx, _) = assert_advance(ctx, lexer.TokenColon)
+      let ctx = case args {
+        [] -> assert_advance(ctx, lexer.TokenColon).0
+        _ -> ctx
+      }
 
       let next = peek(ctx)
       case next {
@@ -299,6 +302,10 @@ fn parse_root(ctx: ParserContext) {
               }
             _ -> error_unexpected_eof(ctx, token)
           }
+          lexer.TokenKeyword("fn") -> {
+                  parse_root_fn(ParserContext(..ctx, token:, rest:), True)
+                  |> parse_root
+                }
         _ ->
           error(
             ctx,
